@@ -1,13 +1,12 @@
 # SkillAgent 開發計畫
 
-## Context
-根據 requirement.md，開發一個 Node.js AI Agent，可連結本地 Ollama LLM，支援可擴充的技能系統（Skills），提供 CLI 互動界面。
+## 背景
 
-## 架構概覽
+根據 requirement.md 開發一個 Node.js AI Agent，連結本地端 Ollama 或 OpenAI-compatible 後端，支援可擴充的技能系統（Skills），提供 CLI 與 Web UI 互動界面。
 
-**零外部依賴**，全使用 Node.js 16+ 原生 API（`http`/`https`、`readline`）。ESM 模式（`"type": "module"`）。
+**原則：零外部依賴，使用 Node.js 16+ 原生 API（`http`/`https`、`readline`、`crypto`），ESM 模式（`"type": "module"`）。**
 
-> **v1.1 變更**：Node.js 最低版本從 18 降為 16。`fetch`（Node 18+ 內建）與 `AbortSignal.timeout()`（Node 17.3+ 內建）改以 `http`/`https` 模組替代，影響 `src/llm/ollama.js` 與 `skills/web/index.js`。
+---
 
 ## 目錄結構
 
@@ -16,141 +15,250 @@ SkillAgent/
 ├── package.json
 ├── README.md
 ├── OLLAMA_SETUP.md
+├── plan.md
 ├── config/
-│   └── default.json              # Ollama URL、模型名稱等設定
+│   └── default.json
 ├── src/
-│   ├── index.js                  # 進入點，組裝並啟動所有模組
+│   ├── index.js
 │   ├── llm/
-│   │   └── ollama.js             # Ollama API 通訊封裝
+│   │   ├── ollama.js
+│   │   └── openaiClient.js
 │   ├── agent/
-│   │   ├── agent.js              # Agent 核心（ReAct 執行循環）
-│   │   └── planner.js            # 解析 LLM 回覆，識別工具呼叫或純文字
+│   │   ├── agent.js
+│   │   ├── planner.js
+│   │   └── debugLogger.js
 │   ├── skills/
-│   │   └── skillLoader.js        # 自動掃描載入 skills/ 模組
-│   └── cli/
-│       └── cli.js                # readline 互動界面
+│   │   ├── skillLoader.js
+│   │   └── scriptRunner.js
+│   ├── cli/
+│   │   └── cli.js
+│   └── web/
+│       ├── websocket.js
+│       ├── server.js
+│       └── public/index.html
 └── skills/
-    ├── system/                   # 系統資訊技能模組
-    │   ├── manifest.json
-    │   └── index.js
-    ├── file/                     # 檔案操作技能模組
-    │   ├── manifest.json
-    │   └── index.js
-    └── web/                      # 網路請求技能模組
-        ├── manifest.json
+    ├── system/
+    │   ├── skill.md
+    │   ├── index.js
+    │   └── platform_context.md
+    ├── file/
+    │   ├── skill.md
+    │   ├── index.js
+    │   ├── script/list_directory.sh
+    │   └── reference/file_tips.md
+    └── web/
+        ├── skill.md
         └── index.js
 ```
 
-## 實作步驟
+---
 
-### 1. `package.json`
-- `"type": "module"`, `"engines": {"node": ">=18.0.0"}`
-- scripts: `start`, `dev` (node --watch)
-- 零 dependencies
+## 模組說明
 
-### 2. `config/default.json`
-```json
-{
-  "ollama": { "baseUrl": "http://localhost:11434", "model": "llama3.2", "stream": true },
-  "agent": { "maxRetries": 3 },
-  "skills": { "directory": "./skills" }
-}
+### `config/default.json`
+
+全域設定：
+
+- `ollama.apiType` — `"ollama"` 或 `"openai"`，決定使用哪個 LLM 客戶端
+- `ollama.numCtx` — 各模式對應的 Context Window 大小（`chat:2048`、`react/plan:8192` 等）
+- `agent.defaultMode` — 預設為 `"auto"`
+- `agent.maxIterations` — ReAct 最大迭代次數，預設 `5`
+- `swarm.agents` — 子 Agent 分組定義（name / skills[] / description）
+- `debug.enabled` / `debug.logDir` — 除錯模式設定
+- `server.port` — Web UI 伺服器埠號，預設 `3000`
+
+---
+
+### `src/llm/ollama.js` — Ollama 原生 API
+
+- `OllamaClient(config)` — 連線至 Ollama `/api/chat`
+- `chat(messages, options)` — ndjson streaming，回傳 `{ content, toolCalls: null, usage }`
+- `usage` 包含：`promptTokens`、`completionTokens`、`totalTokens`、`tokensPerSecond`、`ttftMs`、`totalDurationMs`
+- TTFT 追蹤：記錄請求開始時間與收到第一個 token 的時間差
+- `numCtx` 透過 `options.num_ctx` 傳給 Ollama
+
+---
+
+### `src/llm/openaiClient.js` — OpenAI-compatible API
+
+- `OpenAICompatClient(config)` — 連線至 `/v1/chat/completions`
+- 相容 LM Studio、vLLM、OpenRouter、Ollama OpenAI 模式等後端
+- 原生 Tool Calling：傳送 `tools` 陣列，解析 `tool_calls` 回覆
+- SSE streaming 格式（`data: {...}\n\n`）
+- `buildTools(registry)` — 將技能 registry 轉為 OpenAI `tools` 格式
+- 回傳 `{ content, toolCalls, usage }`（`toolCalls` 為 `null` 或陣列）
+
+---
+
+### `src/agent/planner.js` — LLM 回覆解析器
+
+- 使用 brace-depth counting 掃描 LLM 回覆，找出 JSON 格式的工具呼叫
+- 偵測 `{"action":"use_skill","module":"...","skill":"...","parameters":{...}}`
+- 回傳 `{ type: 'skill_call', module, skill, parameters }` 或 `{ type: 'text', content }`
+- 僅用於 Ollama 原生 API；OpenAI 模式直接讀取 `toolCalls`
+
+---
+
+### `src/agent/agent.js` — Agent 核心
+
+**六種執行模式：**
+
+| 模式 | 方法 | 說明 |
+|------|------|------|
+| `auto` | `_runAuto()` | LLM 分類後路由至 `chat` 或 `react` |
+| `react` | `_runReact()` | ReAct 工具循環，最多 `maxIterations` 次 |
+| `plan` | `_runPlan()` | 生成計畫 → 等待使用者確認/修改 → 執行 |
+| `chat` | `_runChat()` | 純對話，不帶技能描述 |
+| `reflexion` | `_runReflexion()` | ReAct 執行 → 自我審查修正 |
+| `swarm` | `_runSwarm()` | Router 選擇子 Agent → 以限定 registry 執行 |
+
+**`run(userInput, options)` 回呼介面：**
+
+- `onChunk(chunk)` — 串流輸出每個 token
+- `onPlanReview(plan) → Promise<string|null>` — 展示計畫給使用者，null 表示取消
+- `onConfirm(skillName, params) → Promise<boolean>` — 執行高風險技能前確認
+
+**OpenAI Tool Calling 整合：**
+- 偵測 `ollama.apiType === 'openai'` 後，傳送 `tools` 陣列給 LLM
+- `toolCalls` 非 null 時直接使用，跳過 Planner 解析
+- 訊息格式改為 `{role:'tool', tool_call_id, content}`
+
+---
+
+### `src/agent/debugLogger.js` — 除錯日誌
+
+- `log(model, messages, response, usage)` — 寫入 `logs/<session>_turn<NNN>.json`
+- `usage` 欄位包含：`promptTokens`、`completionTokens`、`totalTokens`、`tokensPerSecond`、`ttftMs`、`totalDurationMs`
+
+---
+
+### `src/skills/skillLoader.js` — 技能載入器
+
+- 掃描 `skills/` 子目錄，讀取 `skill.md`
+- **Front Matter 解析**：支援純量（`key: value`）與列表（`key:\n  - item`）
+- `confirm: [skill1, skill2]` → 標記對應技能的 `requiresConfirm: true`
+- 外部腳本偵測：`script/<skillName>.<sh|py|js>`，優先於 skill.md 內嵌腳本
+- 外部參考目錄：`reference/` 下所有檔案自動載入，對模組所有技能共用
+- `index.js` 為選填，所有技能有 Script 時可省略
+
+---
+
+### `src/skills/scriptRunner.js` — 腳本執行器
+
+- 支援 `bash`、`sh`、`python`、`python3`、`node`
+- 參數以 `PARAM_<NAME>` 環境變數傳入（大寫）
+- 參考資料以 `SKILLREF_N`（內容）和 `SKILLREF_PATH_N`（路徑）傳入
+- 30 秒 timeout，超時強制終止
+
+---
+
+### `src/cli/cli.js` — CLI 界面
+
+- Prompt 顯示當前模式：`[auto] >`、`[react] >` 等
+- 指令：`/help`、`/skills`、`/model`、`/mode`、`/clear`、`/debug`、`/exit`
+- `_promptUser(message)` — 攔截下一行輸入，用於 plan review 與 confirm 互動
+- Plan 模式：展示計畫文字，等待使用者按 Enter 確認、輸入修改版、或 `n` 取消
+- 安全確認：顯示技能名稱與參數，等待 Y/n
+
+---
+
+### `src/web/websocket.js` — WebSocket 實作
+
+- RFC 6455 最小化實作，使用 Node.js 內建 `crypto`（SHA-1 + base64 握手）
+- `handshake(req, socket)` — 完成 HTTP Upgrade 握手
+- `WSClient` 類別：幀解碼/編碼、text/binary/ping/close opcode 處理
+
+---
+
+### `src/web/server.js` — Web 伺服器
+
+- `createServer()` 處理 HTTP（靜態頁面 + `/api/skills`）
+- `server.on('upgrade')` 處理 WebSocket 連線
+- `WebSession` 類別：每個連線獨立狀態，`_waitFor(type)` 等待使用者回應
+- WebSocket 訊息協定：
+
+  | 方向 | type | 說明 |
+  |------|------|------|
+  | 客戶端 → 伺服器 | `chat` | 使用者輸入 |
+  | 客戶端 → 伺服器 | `command` | 指令（mode/debug/clear/model/skills）|
+  | 客戶端 → 伺服器 | `plan_confirm` | Plan 模式確認/修改/取消 |
+  | 客戶端 → 伺服器 | `confirm_response` | 安全確認 Y/N |
+  | 伺服器 → 客戶端 | `init` | 初始狀態（model/mode/debug）|
+  | 伺服器 → 客戶端 | `chunk` | 串流輸出片段 |
+  | 伺服器 → 客戶端 | `done` | 回應完畢 |
+  | 伺服器 → 客戶端 | `plan` | 展示計畫供審閱 |
+  | 伺服器 → 客戶端 | `confirm` | 安全確認請求 |
+  | 伺服器 → 客戶端 | `state` | 狀態變更通知 |
+  | 伺服器 → 客戶端 | `error` | 錯誤訊息 |
+
+---
+
+### `src/web/public/index.html` — Web UI 前端
+
+- 純 HTML/CSS/JS，無外部框架或 CDN
+- 深色主題，monospace 字型
+- 功能：對話歷史、串流輸出、模式切換下拉、除錯開關、技能列表側邊欄
+- Plan 確認 Modal：顯示計畫文字，可編輯修改後確認
+- 安全確認 Modal：顯示技能名稱與參數，確認/拒絕
+- WebSocket 自動重連（5 秒後重試）
+
+---
+
+## 技能安全確認機制
+
+在 `skill.md` front matter 加入 `confirm` 陣列：
+
+```yaml
+---
+description: 系統資訊查詢技能
+confirm:
+  - run_command
+---
 ```
 
-### 3. `src/llm/ollama.js` — OllamaClient 類別
-- `chat(messages, options)` — POST `/api/chat`，支援 stream（逐字 chunk）
-- `listModels()` — GET `/api/tags`
-- `checkConnection()` — 驗證 Ollama 是否在線
-- 使用 Node.js `http`/`https` 模組（Node 16 相容，不用 fetch）
+- `skillLoader` 載入時將對應技能標記 `requiresConfirm: true`
+- Agent `_executeLoop()` 在執行前呼叫 `onConfirm` 回呼
+- CLI 顯示 Y/n 提示，Web UI 顯示確認 Modal
+- 目前已標記：`system.run_command`、`file.write_file`
 
-### 4. `src/skills/skillLoader.js` — SkillLoader 類別
-- `load()` — 掃描 `skills/` 子目錄，讀 `skill.md`（Markdown 格式），動態 `import` `index.js`
-- `getRegistry()` — 回傳 `Map<moduleName, {manifest, execute}>`
-- `getSkillsDescription()` — 輸出供注入 system prompt 的技能文字描述
-- Skill Markdown 格式：`# 模組名` / `## 技能名` / `### Parameters` / `- param (type, required): 描述`
+---
 
-### 5. `src/agent/planner.js` — Planner 類別
-- `parse(llmResponse)` — 用 regex 偵測 JSON 格式工具呼叫
-- 回傳 `{type: 'skill_call', module, skill, parameters}` 或 `{type: 'text', content}`
-- System Prompt 指示 LLM：需要工具時以 `{"action":"use_skill","module":"...","skill":"...","parameters":{...}}` 格式回覆
+## 版本變更記錄
 
-### 6. `src/agent/agent.js` — Agent 類別（ReAct Loop）
-- `initialize()` — 檢查 Ollama 連線，建立含技能說明的 system prompt
-- `run(userInput)` — 主執行入口：組裝 messages → 呼叫 LLM → Planner 解析 → 若 skill_call 則執行技能 → 結果加入 messages → 再次 LLM（最多 maxRetries）→ 回傳最終文字
-- 維護 `conversationHistory[]`，`clearHistory()`
+### v1.0 — 初始版本
+- Ollama 連線、ReAct 模式、Skills 系統、CLI
 
-### 7. `src/cli/cli.js` — CLI 類別
-特殊指令：
-| 指令 | 說明 |
-|------|------|
-| `/help` | 顯示說明 |
-| `/skills` | 列出所有技能 |
-| `/model <name>` | 切換模型 |
-| `/clear` | 清除對話歷史 |
-| `/exit` `/quit` | 離開 |
+### v1.1 — 除錯模式 + Node.js 16 相容
+- DebugLogger（`logs/` JSON 日誌）
+- `fetch` → `http`/`https` 模組（Node.js 16 相容）
+- Skill 格式：JSON manifest → Markdown（Anthropic 格式）
+- Script 執行（bash/python/node）+ Reference 支援
+- 外部腳本（`script/` 目錄）+ 外部參考（`reference/` 目錄）
+- Plan 模式
 
-其餘輸入 → `agent.run(input)`，支援 streaming 逐字輸出
+### v1.2 — 雙 API + 多模式 + Web UI
+- OpenAI-compatible API 客戶端（原生 Tool Calling）
+- TTFT（首字生成時間）追蹤
+- `numCtx` 各模式獨立設定
+- 新模式：`auto`（預設）、`chat`、`reflexion`、`swarm`
+- Plan 模式：使用者確認/修改計畫後才執行
+- 腳本安全確認（`confirm` front matter）
+- CLI prompt 顯示當前模式（`[mode] >`）
+- `--serve` 模式：HTTP + WebSocket 伺服器 + 純 HTML/CSS/JS Web UI
 
-### 8. `src/index.js` — 啟動序列
-```
-載入 config → OllamaClient → SkillLoader.load() → Agent.initialize() → CLI.start()
-```
+---
 
-### 9. 三個內建技能模組
+## 驗證清單
 
-**`skills/system/`**
-- `get_time` — 目前日期時間
-- `get_platform` — OS 資訊
-- `run_command` — 執行 shell 指令（用 `child_process.exec`）
-
-**`skills/file/`**
-- `read_file` — 讀取檔案（fs/promises）
-- `write_file` — 寫入檔案
-- `list_directory` — 列目錄
-
-**`skills/web/`**
-- `fetch_url` — HTTP GET
-- `post_request` — HTTP POST（JSON）
-
-### 10. 說明文件
-- `OLLAMA_SETUP.md` — 安裝 Ollama、下載模型、設定連結、啟動 Agent
-- `README.md` — 使用說明、CLI 指令、自訂技能模組教學（manifest.json + index.js 格式）
-
-### 11. 除錯模式（新增）
-
-- `src/agent/debugLogger.js` — DebugLogger 類別
-  - `enable()` / `disable()` / `toggle()` / `isEnabled()`
-  - `log(model, messages, response)` — 每次 LLM 呼叫後寫入 JSON 日誌
-  - 日誌路徑：`logs/<session>_turn<NNN>.json`
-- `config/default.json` 新增 `"debug": {"enabled": false, "logDir": "./logs"}`
-- `src/index.js` — 建立 DebugLogger，傳給 Agent 與 CLI
-- `src/agent/agent.js` — 每次 `ollama.chat()` 後呼叫 `debugLogger?.log()`
-- `src/cli/cli.js` — 新增 `/debug` 指令切換除錯模式，banner 顯示目前狀態
-
-### 12. Agent 模式（新增）
-
-- `config/default.json` — 新增 `"mode": "react"`
-- `src/agent/agent.js` — `mode` 屬性、`setMode()`、`getMode()`
-  - **ReAct 模式**（預設）：`_runReact()` → `_executeLoop()`
-  - **Plan 模式**：`_runPlan()` → 先規劃（無 stream，記錄 usage）→ 注入計畫 → `_executeLoop()`
-  - 共用 `_executeLoop()` 執行 ReAct 循環
-- `src/cli/cli.js` — 新增 `/mode [react|plan]` 指令，banner 顯示目前模式
-
-### 13. 除錯模式增強（新增）
-
-- `src/llm/ollama.js` — `chat()` 改為回傳 `{ content, usage }`
-  - `usage`: `promptTokens`, `completionTokens`, `totalTokens`, `tokensPerSecond`, `totalDurationMs`
-  - 從 streaming 最後 `done: true` chunk 解析 Ollama stats
-- `src/agent/debugLogger.js` — `log()` 加入 `usage` 參數，寫入日誌
-- `src/agent/agent.js` — 所有 `ollama.chat()` 呼叫改為解構 `{ content, usage }`，傳 `usage` 給 logger
-
-## 驗證方式
-1. `node src/index.js` 啟動，確認顯示 Ollama 連線狀態與技能數量
-2. 輸入 `/skills` 確認三個技能模組正確載入
-3. 輸入問題（如「現在幾點？」），確認 Agent 呼叫 `system.get_time` 並回覆
-4. 輸入「讀取 README.md」，確認 Agent 呼叫 `file.read_file`
-5. 輸入 `/clear` 後對話歷史重置，`/exit` 正常離開
-6. 在 `skills/` 新增自訂模組目錄，重啟後確認自動載入
-7. 輸入 `/debug` 開啟除錯模式，發送訊息後確認 `logs/` 目錄產生含 usage 的 JSON 日誌
-8. 輸入 `/mode plan` 切換為 Plan 模式，確認回應先顯示計畫再執行
-9. 輸入 `/mode react` 切回 ReAct 模式
+- [ ] `node src/index.js` 啟動，顯示連線狀態與技能數量
+- [ ] Prompt 顯示 `[auto] >`
+- [ ] 輸入「現在幾點？」→ 自動選擇 react，呼叫 `system.get_time`
+- [ ] 輸入「你好」→ 自動選擇 chat，直接回覆不呼叫工具
+- [ ] `/mode plan` → 輸入任務，確認顯示計畫等待確認/修改
+- [ ] `/mode reflexion` → 執行後出現自我審查輸出
+- [ ] 觸發 `system.run_command` → 執行前出現確認提示
+- [ ] 觸發 `file.write_file` → 執行前出現確認提示
+- [ ] `/debug` 開啟，確認 `logs/` 中含 `ttftMs` 欄位
+- [ ] `node src/index.js --serve` → http://localhost:3000 可用，串流正常
+- [ ] Web UI：模式切換、除錯開關、技能列表、Plan 確認 Modal 正常
+- [ ] `config.ollama.apiType: "openai"` → 切換 OpenAI-compat 模式，Tool Calling 正常

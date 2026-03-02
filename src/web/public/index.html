@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SkillAgent Web UI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f0f1a;
+      --surface: #1a1a2e;
+      --border: #2a2a4a;
+      --accent: #7c6af7;
+      --accent2: #5b8dd9;
+      --text: #e2e2f0;
+      --muted: #8888aa;
+      --user-bg: #1e2a4a;
+      --bot-bg: #1a1a2e;
+      --error: #e05252;
+      --warn: #d4a017;
+      --success: #3fb950;
+      --font: 'Segoe UI', system-ui, sans-serif;
+      --mono: 'Cascadia Code', 'Fira Code', monospace;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    header h1 { font-size: 1rem; font-weight: 600; color: var(--accent); }
+    .header-info { font-size: 0.75rem; color: var(--muted); }
+    .spacer { flex: 1; }
+    .badge {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: default;
+    }
+    .badge.mode { border-color: var(--accent); color: var(--accent); }
+    .badge.debug-on { border-color: var(--success); color: var(--success); }
+
+    /* ── Messages ── */
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .msg {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-width: 92%;
+    }
+    .msg.user { align-self: flex-end; }
+    .msg.bot  { align-self: flex-start; }
+    .msg.system { align-self: center; max-width: 100%; }
+
+    .msg-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      padding: 0 4px;
+    }
+    .msg.user .msg-label { text-align: right; }
+
+    .msg-bubble {
+      padding: 8px 12px;
+      border-radius: 10px;
+      line-height: 1.55;
+      font-size: 0.875rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user  .msg-bubble { background: var(--user-bg); border: 1px solid #2a3a6a; }
+    .msg.bot   .msg-bubble { background: var(--bot-bg);  border: 1px solid var(--border); }
+    .msg.system .msg-bubble {
+      background: transparent;
+      border: 1px dashed var(--border);
+      color: var(--muted);
+      font-size: 0.775rem;
+      text-align: center;
+    }
+    .msg.error .msg-bubble { border-color: var(--error); color: var(--error); }
+
+    .typing-dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      background: var(--muted);
+      border-radius: 50%;
+      animation: blink 1s infinite;
+      margin-left: 4px;
+    }
+    @keyframes blink { 0%,100%{opacity:.2} 50%{opacity:1} }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .tool-btn {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+    .tool-btn:hover { background: var(--border); }
+    .tool-btn.active { border-color: var(--accent); color: var(--accent); }
+
+    select.tool-btn {
+      appearance: none;
+      padding-right: 20px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='%238888aa'%3E%3Cpath d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 6px center;
+    }
+
+    /* ── Input ── */
+    #input-area {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #user-input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 0.875rem;
+      resize: none;
+      height: 40px;
+      max-height: 120px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    #user-input:focus { border-color: var(--accent); }
+    #send-btn {
+      padding: 0 16px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 600;
+      transition: opacity .15s;
+      flex-shrink: 0;
+    }
+    #send-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    /* ── Modal (Plan review / Confirm) ── */
+    .modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.65);
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+      max-width: 560px;
+      width: 90%;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .modal h3 { font-size: 0.95rem; color: var(--accent); }
+    .modal pre {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      white-space: pre-wrap;
+      max-height: 260px;
+      overflow-y: auto;
+      color: var(--text);
+    }
+    .modal textarea {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      resize: vertical;
+      min-height: 100px;
+      outline: none;
+    }
+    .modal textarea:focus { border-color: var(--accent); }
+    .modal-hint { font-size: 0.75rem; color: var(--muted); }
+    .modal-btns { display: flex; gap: 8px; justify-content: flex-end; }
+    .modal-btns button {
+      padding: 6px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .modal-btns .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .modal-btns .btn-danger  { border-color: var(--error); color: var(--error); }
+
+    /* ── Skills Panel ── */
+    #skills-panel {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.65);
+      align-items: flex-start;
+      justify-content: flex-end;
+      z-index: 100;
+    }
+    #skills-panel.active { display: flex; }
+    #skills-content {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      width: 320px;
+      height: 100%;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .skills-header { display: flex; align-items: center; justify-content: space-between; }
+    .skills-header h3 { font-size: 0.9rem; color: var(--accent); }
+    .close-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; }
+    .skill-module { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .skill-module h4 { font-size: 0.8rem; color: var(--accent2); margin-bottom: 6px; }
+    .skill-module p { font-size: 0.72rem; color: var(--muted); margin-bottom: 6px; }
+    .skill-item { font-size: 0.78rem; padding: 3px 0; color: var(--text); }
+    .skill-item span { color: var(--muted); font-size: 0.72rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ SkillAgent</h1>
+  <div class="header-info" id="header-model">…</div>
+  <div class="spacer"></div>
+  <span class="badge mode" id="badge-mode">auto</span>
+  <span class="badge" id="badge-debug">debug off</span>
+</header>
+
+<!-- Chat messages -->
+<div id="messages"></div>
+
+<!-- Toolbar -->
+<div id="toolbar">
+  <select class="tool-btn" id="mode-select" title="切換 Agent 模式">
+    <option value="auto">auto</option>
+    <option value="react">react</option>
+    <option value="plan">plan</option>
+    <option value="chat">chat</option>
+    <option value="reflexion">reflexion</option>
+    <option value="swarm">swarm</option>
+  </select>
+  <button class="tool-btn" id="btn-debug" title="切換除錯模式">debug</button>
+  <button class="tool-btn" id="btn-skills" title="顯示技能列表">skills</button>
+  <button class="tool-btn" id="btn-clear" title="清除對話歷史">clear</button>
+</div>
+
+<!-- Input area -->
+<div id="input-area">
+  <textarea id="user-input" placeholder="輸入訊息... (Enter 送出，Shift+Enter 換行)" rows="1"></textarea>
+  <button id="send-btn">送出</button>
+</div>
+
+<!-- Plan Review Modal -->
+<div class="modal-overlay" id="plan-modal">
+  <div class="modal">
+    <h3>📋 執行計畫確認</h3>
+    <pre id="plan-content"></pre>
+    <div class="modal-hint">可在下方修改計畫後確認，或直接點「確認執行」使用原計畫。</div>
+    <textarea id="plan-edit" placeholder="（可選）在此修改計畫..."></textarea>
+    <div class="modal-btns">
+      <button class="btn-danger" id="plan-cancel">取消</button>
+      <button class="btn-primary" id="plan-confirm">確認執行</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Modal -->
+<div class="modal-overlay" id="confirm-modal">
+  <div class="modal">
+    <h3>⚠️ 操作確認</h3>
+    <pre id="confirm-content"></pre>
+    <div class="modal-hint">此操作可能修改系統狀態，是否繼續？</div>
+    <div class="modal-btns">
+      <button class="btn-danger" id="confirm-no">拒絕</button>
+      <button class="btn-primary" id="confirm-yes">確認執行</button>
+    </div>
+  </div>
+</div>
+
+<!-- Skills Panel -->
+<div id="skills-panel">
+  <div id="skills-content">
+    <div class="skills-header">
+      <h3>可用技能模組</h3>
+      <button class="close-btn" id="skills-close">✕</button>
+    </div>
+    <div id="skills-list"></div>
+  </div>
+</div>
+
+<script>
+  // ── WebSocket 連線 ────────────────────────────────────────────────────────
+  const WS_URL = `ws://${location.host}/ws`;
+  let ws = null;
+  let planResolver = null;
+  let confirmResolver = null;
+
+  function connect() {
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => addMsg('system', '已連線到 SkillAgent');
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      handleMsg(msg);
+    };
+
+    ws.onclose = () => {
+      addMsg('system', '連線中斷，5 秒後重試...');
+      setBusy(false);
+      setTimeout(connect, 5000);
+    };
+
+    ws.onerror = () => ws.close();
+  }
+
+  function send(obj) { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
+
+  // ── 訊息處理 ──────────────────────────────────────────────────────────────
+  let currentBotBubble = null;
+
+  function handleMsg(msg) {
+    switch (msg.type) {
+      case 'init':
+        document.getElementById('header-model').textContent = `${msg.model} (${msg.apiType})`;
+        updateModeBadge(msg.mode);
+        updateDebugBadge(msg.debug);
+        document.getElementById('mode-select').value = msg.mode;
+        break;
+
+      case 'chunk':
+        if (!currentBotBubble) currentBotBubble = addMsg('bot', '');
+        currentBotBubble.textContent += msg.content;
+        scrollBottom();
+        break;
+
+      case 'done':
+        currentBotBubble = null;
+        setBusy(false);
+        break;
+
+      case 'error':
+        currentBotBubble = null;
+        addMsg('error', `錯誤: ${msg.message}`);
+        setBusy(false);
+        break;
+
+      case 'plan':
+        showPlanModal(msg.plan);
+        break;
+
+      case 'confirm':
+        showConfirmModal(msg.skillName, msg.params);
+        break;
+
+      case 'state':
+        if (msg.mode !== undefined) { updateModeBadge(msg.mode); document.getElementById('mode-select').value = msg.mode; }
+        if (msg.debug !== undefined) updateDebugBadge(msg.debug);
+        if (msg.model !== undefined) document.getElementById('header-model').textContent = msg.model;
+        if (msg.message) addMsg('system', msg.message);
+        break;
+
+      case 'skills':
+        renderSkills(msg.skills);
+        break;
+    }
+  }
+
+  // ── Chat UI ───────────────────────────────────────────────────────────────
+  const messagesEl = document.getElementById('messages');
+
+  function addMsg(role, text) {
+    const wrapper = document.createElement('div');
+    wrapper.className = `msg ${role}`;
+
+    const label = document.createElement('div');
+    label.className = 'msg-label';
+    label.textContent = role === 'user' ? '你' : role === 'bot' ? 'Agent' : '';
+    if (label.textContent) wrapper.appendChild(label);
+
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    bubble.textContent = text;
+    wrapper.appendChild(bubble);
+
+    messagesEl.appendChild(wrapper);
+    scrollBottom();
+    return bubble;
+  }
+
+  function scrollBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  let busy = false;
+  function setBusy(val) {
+    busy = val;
+    document.getElementById('send-btn').disabled = val;
+    document.getElementById('user-input').disabled = val;
+  }
+
+  function submitInput() {
+    const input = document.getElementById('user-input');
+    const text = input.value.trim();
+    if (!text || busy) return;
+    addMsg('user', text);
+    input.value = '';
+    input.style.height = '40px';
+    setBusy(true);
+    currentBotBubble = null;
+    send({ type: 'chat', content: text });
+  }
+
+  document.getElementById('send-btn').addEventListener('click', submitInput);
+  document.getElementById('user-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitInput(); }
+    // Auto-resize
+    setTimeout(() => {
+      const el = e.target;
+      el.style.height = '40px';
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    }, 0);
+  });
+
+  // ── Toolbar ───────────────────────────────────────────────────────────────
+  document.getElementById('mode-select').addEventListener('change', (e) => {
+    send({ type: 'command', command: 'mode', args: [e.target.value] });
+  });
+
+  document.getElementById('btn-debug').addEventListener('click', () => {
+    send({ type: 'command', command: 'debug' });
+  });
+
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    send({ type: 'command', command: 'clear' });
+    messagesEl.innerHTML = '';
+  });
+
+  document.getElementById('btn-skills').addEventListener('click', () => {
+    send({ type: 'command', command: 'skills' });
+    document.getElementById('skills-panel').classList.add('active');
+  });
+
+  document.getElementById('skills-close').addEventListener('click', () => {
+    document.getElementById('skills-panel').classList.remove('active');
+  });
+
+  // ── Badges ────────────────────────────────────────────────────────────────
+  function updateModeBadge(mode) {
+    document.getElementById('badge-mode').textContent = mode;
+  }
+
+  function updateDebugBadge(on) {
+    const el = document.getElementById('badge-debug');
+    el.textContent = on ? 'debug on' : 'debug off';
+    el.className = `badge ${on ? 'debug-on' : ''}`;
+    document.getElementById('btn-debug').className = `tool-btn ${on ? 'active' : ''}`;
+  }
+
+  // ── Plan Modal ────────────────────────────────────────────────────────────
+  function showPlanModal(plan) {
+    document.getElementById('plan-content').textContent = plan;
+    document.getElementById('plan-edit').value = '';
+    document.getElementById('plan-modal').classList.add('active');
+  }
+
+  document.getElementById('plan-confirm').addEventListener('click', () => {
+    const edited = document.getElementById('plan-edit').value.trim();
+    document.getElementById('plan-modal').classList.remove('active');
+    send({ type: 'plan_confirm', plan: edited || null, cancelled: false });
+  });
+
+  document.getElementById('plan-cancel').addEventListener('click', () => {
+    document.getElementById('plan-modal').classList.remove('active');
+    send({ type: 'plan_confirm', cancelled: true });
+    setBusy(false);
+    currentBotBubble = null;
+    addMsg('system', '（已取消執行計畫）');
+  });
+
+  // ── Confirm Modal ─────────────────────────────────────────────────────────
+  function showConfirmModal(skillName, params) {
+    const paramsStr = params && Object.keys(params).length
+      ? JSON.stringify(params, null, 2)
+      : '（無參數）';
+    document.getElementById('confirm-content').textContent = `技能: ${skillName}\n參數:\n${paramsStr}`;
+    document.getElementById('confirm-modal').classList.add('active');
+  }
+
+  document.getElementById('confirm-yes').addEventListener('click', () => {
+    document.getElementById('confirm-modal').classList.remove('active');
+    send({ type: 'confirm_response', confirmed: true });
+  });
+
+  document.getElementById('confirm-no').addEventListener('click', () => {
+    document.getElementById('confirm-modal').classList.remove('active');
+    send({ type: 'confirm_response', confirmed: false });
+  });
+
+  // ── Skills Panel ──────────────────────────────────────────────────────────
+  function renderSkills(skills) {
+    const list = document.getElementById('skills-list');
+    list.innerHTML = '';
+    if (!skills?.length) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:.8rem">無可用技能</div>';
+      return;
+    }
+    for (const mod of skills) {
+      const div = document.createElement('div');
+      div.className = 'skill-module';
+      div.innerHTML = `<h4>${mod.name}</h4><p>${mod.description}</p>`;
+      for (const s of mod.skills) {
+        const item = document.createElement('div');
+        item.className = 'skill-item';
+        item.innerHTML = `• ${s.name} <span>${s.description}</span>`;
+        div.appendChild(item);
+      }
+      list.appendChild(div);
+    }
+  }
+
+  // ── 啟動 ──────────────────────────────────────────────────────────────────
+  connect();
+</script>
+</body>
+</html>

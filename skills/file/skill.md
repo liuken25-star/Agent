@@ -1,5 +1,7 @@
 ---
 description: 檔案讀寫與目錄操作技能
+confirm:
+  - write_file
 ---
 
 ## read_file

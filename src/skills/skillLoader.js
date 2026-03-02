@@ -5,17 +5,30 @@ import { pathToFileURL } from 'url';
 import { runScript } from './scriptRunner.js';
 
 // ── 解析 YAML front matter（Anthropic 格式） ──────────────────────────────
+// 支援純量鍵值（key: value）及列表（key:\n  - item1\n  - item2）
 function parseFrontMatter(content) {
   const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)/);
   if (!match) return { meta: {}, body: content };
 
   const meta = {};
-  for (const line of match[1].split('\n')) {
+  const lines = match[1].split('\n');
+  let currentKey = null;
+
+  for (const line of lines) {
+    // 列表項目（以 "  - " 開頭）
+    if (currentKey && line.match(/^\s+-\s+/)) {
+      if (!Array.isArray(meta[currentKey])) meta[currentKey] = [];
+      meta[currentKey].push(line.replace(/^\s+-\s+/, '').trim());
+      continue;
+    }
     const colonIdx = line.indexOf(':');
-    if (colonIdx === -1) continue;
+    if (colonIdx === -1) { currentKey = null; continue; }
     const key = line.slice(0, colonIdx).trim();
     const value = line.slice(colonIdx + 1).trim();
-    if (key) meta[key] = value;
+    if (!key) { currentKey = null; continue; }
+    currentKey = key;
+    // 如果值為空，可能後面跟著列表
+    meta[key] = value || null;
   }
   return { meta, body: match[2] };
 }
@@ -175,11 +188,20 @@ export class SkillLoader {
         const mdContent = await readFile(skillMdPath, 'utf-8');
         const { meta, body } = parseFrontMatter(mdContent);
 
+        const confirmSkills = Array.isArray(meta.confirm) ? meta.confirm : [];
+
         const manifest = {
           name: dir.name,
           description: meta.description ?? '',
           skills: parseSkillsFromBody(body),
         };
+
+        // 根據 front matter 的 confirm 陣列標記需確認的技能
+        for (const skill of manifest.skills) {
+          if (confirmSkills.includes(skill.name)) {
+            skill.requiresConfirm = true;
+          }
+        }
 
         if (manifest.skills.length === 0) {
           console.warn(`[SkillLoader] 跳過 ${dir.name}：skill.md 未定義任何技能`);

@@ -1,5 +1,7 @@
 ---
 description: 系統資訊查詢技能
+confirm:
+  - run_command
 ---
 
 ## get_time

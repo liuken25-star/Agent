@@ -3,12 +3,29 @@
     "baseUrl": "http://localhost:11434",
     "model": "llama3.2",
     "stream": true,
-    "temperature": 0.7
+    "temperature": 0.7,
+    "apiType": "ollama",
+    "numCtx": {
+      "chat": 2048,
+      "react": 8192,
+      "plan": 8192,
+      "reflexion": 8192,
+      "auto": 4096,
+      "swarm": 4096,
+      "default": 4096
+    }
   },
   "agent": {
-    "mode": "react",
-    "maxRetries": 3,
+    "defaultMode": "auto",
+    "maxIterations": 5,
     "systemPrompt": "你是一個智能 AI 助手，可以使用工具來完成用戶的指令。\n\n當你需要使用工具時，請使用以下 JSON 格式回覆（必須是獨立一行）：\n{\"action\":\"use_skill\",\"module\":\"模組名稱\",\"skill\":\"技能名稱\",\"parameters\":{\"參數名\":\"參數值\"}}\n\n若不需要使用工具，直接用自然語言回覆即可。\n重要：每次只能呼叫一個工具，工具執行後會回傳結果，你再根據結果繼續回應。"
+  },
+  "swarm": {
+    "agents": [
+      { "name": "system-agent", "skills": ["system"], "description": "處理系統資訊查詢與 shell 指令執行" },
+      { "name": "file-agent", "skills": ["file"], "description": "處理檔案讀取、寫入與目錄列表" },
+      { "name": "web-agent", "skills": ["web"], "description": "處理 HTTP 網路請求" }
+    ]
   },
   "skills": {
     "directory": "./skills"
@@ -16,5 +33,8 @@
   "debug": {
     "enabled": false,
     "logDir": "./logs"
+  },
+  "server": {
+    "port": 3000
   }
 }

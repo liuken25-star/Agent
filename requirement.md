@@ -6,6 +6,7 @@
     - Ollama 原生 API（`/api/chat`）
     - OpenAI 相容 API（`/v1/chat/completions`），可同時相容 LM Studio、vLLM、OpenRouter 等後端
   - 使用 OpenAI 相容 API 時，可利用原生的 Tool Calling 機制（`tools` / `tool_calls`）取代文字解析，並自動取得 Token 使用量統計
+  - 支援透過設定檔調整 Context Window 大小（`num_ctx`），並可依據不同模式自動調整（例如純對話模式使用較小的 context 以節省資源，Plan / ReAct 模式使用較大的 context 以容納工具結果）
 - 可選擇使用下面模式：
   - Auto 模式（預設）
     - 由 Agent 根據使用者輸入自動判斷最適合的執行模式（如簡單問答自動使用純對話模式、需要工具時自動使用 ReAct 模式等）。

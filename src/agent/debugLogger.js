@@ -28,6 +28,7 @@ export class DebugLogger {
         completionTokens: usage.completionTokens,
         totalTokens: usage.totalTokens,
         tokensPerSecond: usage.tokensPerSecond,
+        ttftMs: usage.ttftMs ?? 0,
         totalDurationMs: usage.totalDurationMs,
       } : null,
       messages,

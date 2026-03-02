@@ -1,14 +1,17 @@
 import readline from 'readline';
 
+const VALID_MODES = ['auto', 'react', 'plan', 'chat', 'reflexion', 'swarm'];
+
 const HELP_TEXT = `
 可用指令：
-  /help               顯示此說明
-  /skills             列出所有可用技能
-  /model <名稱>       切換 Ollama 模型
-  /mode [react|plan]  查看或切換 Agent 模式
-  /clear              清除對話歷史
-  /debug              切換除錯模式（開啟時將每次 LLM 對話儲存至 logs/）
-  /exit, /quit        離開程式
+  /help                  顯示此說明
+  /skills                列出所有可用技能
+  /model <名稱>          切換模型
+  /mode [模式名稱]       查看或切換 Agent 模式
+                         可用模式: auto | react | plan | chat | reflexion | swarm
+  /clear                 清除對話歷史
+  /debug                 切換除錯模式（開啟時將每次 LLM 對話儲存至 logs/）
+  /exit, /quit           離開程式
 
 其他輸入會直接傳送給 AI 助手。
 `;
@@ -21,19 +24,29 @@ export class CLI {
     this.debugLogger = debugLogger ?? null;
     this.rl = null;
     this.isProcessing = false;
+    // 用於攔截下一行輸入（plan review / confirm 時使用）
+    this._inputHandler = null;
   }
 
   async start() {
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: '\n> ',
+      prompt: this._prompt(),
     });
 
     this._printBanner();
     this.rl.prompt();
 
     this.rl.on('line', async (line) => {
+      // 若有攔截處理器，優先交給它
+      if (this._inputHandler) {
+        const handler = this._inputHandler;
+        this._inputHandler = null;
+        handler(line.trim());
+        return;
+      }
+
       const input = line.trim();
       if (!input) {
         this.rl.prompt();
@@ -46,12 +59,28 @@ export class CLI {
       }
 
       await this._handleInput(input);
+      this.rl.setPrompt(this._prompt());
       this.rl.prompt();
     });
 
     this.rl.on('close', () => {
       console.log('\n再見！');
       process.exit(0);
+    });
+  }
+
+  _prompt() {
+    return `\n[${this.agent.getMode()}] > `;
+  }
+
+  // 請求使用者輸入一行，回傳 Promise<string>
+  _promptUser(message) {
+    return new Promise(resolve => {
+      process.stdout.write(message);
+      this._inputHandler = (answer) => {
+        this.rl.setPrompt(this._prompt());
+        resolve(answer);
+      };
     });
   }
 
@@ -64,17 +93,35 @@ export class CLI {
     this.isProcessing = true;
     process.stdout.write('\n');
 
+    const onChunk = (chunk) => process.stdout.write(chunk);
+
+    // Plan mode：展示計畫給使用者確認/修改
+    const onPlanReview = async (plan) => {
+      process.stdout.write(`\n📋 計畫：\n${plan}\n`);
+      const answer = await this._promptUser('\n繼續執行？Enter 確認 / 輸入修改後計畫 / n 取消: ');
+      if (answer.toLowerCase() === 'n') return null;
+      return answer || plan;
+    };
+
+    // 安全確認：執行可能修改系統狀態的技能前詢問
+    const onConfirm = async (skillName, params) => {
+      const paramsStr = Object.keys(params).length
+        ? JSON.stringify(params)
+        : '（無參數）';
+      process.stdout.write(`\n⚠️  即將執行: ${skillName} ${paramsStr}\n`);
+      const answer = await this._promptUser('確認執行？(Y/n): ');
+      return answer.toLowerCase() !== 'n';
+    };
+
     try {
       let hasOutput = false;
-
-      await this.agent.run(input, (chunk) => {
-        process.stdout.write(chunk);
-        hasOutput = true;
+      await this.agent.run(input, {
+        onChunk: (chunk) => { onChunk(chunk); hasOutput = true; },
+        onPlanReview,
+        onConfirm,
       });
-
       if (!hasOutput) {
-        // streaming 未觸發（可能是 stream:false），run() 已回傳完整結果
-        // agent.run 內部已 print，此處不重複
+        // stream:false 路徑（agent 內部無串流輸出），run() 回傳值已由 agent 處理
       }
       process.stdout.write('\n');
     } catch (err) {
@@ -108,7 +155,7 @@ export class CLI {
 
       case '/mode':
         if (!args[0]) {
-          console.log(`目前模式: ${this.agent.getMode()}  (可用: react | plan)`);
+          console.log(`目前模式: ${this.agent.getMode()}  (可用: ${VALID_MODES.join(' | ')})`);
         } else {
           try {
             this.agent.setMode(args[0]);
@@ -153,28 +200,32 @@ export class CLI {
     for (const [, { manifest }] of this.registry) {
       console.log(`\n  [${manifest.name}] ${manifest.description}`);
       for (const skill of manifest.skills) {
-        console.log(`    - ${skill.name}: ${skill.description}`);
+        const confirmTag = skill.requiresConfirm ? ' ⚠️' : '';
+        console.log(`    - ${skill.name}: ${skill.description}${confirmTag}`);
       }
     }
     console.log();
   }
 
   _printBanner() {
-    const models = this.ollama.model;
+    const model = this.ollama.model;
+    const apiType = this.ollama.apiType === 'openai' ? 'OpenAI-compat' : 'Ollama';
     const skillCount = this.registry.size;
     const totalSkills = [...this.registry.values()].reduce(
       (sum, m) => sum + m.manifest.skills.length, 0
     );
+    const modeLabel = this.agent.getMode();
+    const debugStatus = this.debugLogger?.isEnabled() ? '開啟' : '關閉';
+
+    const pad = (s, n) => String(s).padEnd(n);
 
     console.log('');
     console.log('╔══════════════════════════════════════╗');
-    console.log('║         SkillAgent v1.0.0            ║');
-    console.log(`║  模型: ${models.padEnd(28)}║`);
-    console.log(`║  技能: ${skillCount} 個模組 / ${totalSkills} 個技能${' '.repeat(Math.max(0, 21 - String(skillCount).length - String(totalSkills).length))}║`);
-    const modeLabel = this.agent.getMode() === 'plan' ? 'Plan 模式' : 'ReAct 模式';
-    console.log(`║  模式: ${modeLabel.padEnd(28)}║`);
-    const debugStatus = this.debugLogger?.isEnabled() ? '開啟' : '關閉';
-    console.log(`║  除錯: ${debugStatus.padEnd(28)}║`);
+    console.log('║         SkillAgent v1.1.0            ║');
+    console.log(`║  模型: ${pad(`${model} (${apiType})`, 28)}║`);
+    console.log(`║  技能: ${pad(`${skillCount} 個模組 / ${totalSkills} 個技能`, 28)}║`);
+    console.log(`║  模式: ${pad(modeLabel, 28)}║`);
+    console.log(`║  除錯: ${pad(debugStatus, 28)}║`);
     console.log('╚══════════════════════════════════════╝');
     console.log('');
     console.log('輸入 /help 查看可用指令');

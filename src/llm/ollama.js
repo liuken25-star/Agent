@@ -30,7 +30,7 @@ async function readBody(res) {
 }
 
 // 將 Ollama 回傳的原始 stats 轉為易讀格式
-function parseUsage(json) {
+function parseUsage(json, ttftMs = 0) {
   const evalCount = json.eval_count ?? 0;
   const evalDurationNs = json.eval_duration ?? 0;
   const promptTokens = json.prompt_eval_count ?? 0;
@@ -44,6 +44,7 @@ function parseUsage(json) {
       ? Math.round(evalCount / (evalDurationNs / 1e9) * 10) / 10
       : 0,
     totalDurationMs: Math.round(totalDurationNs / 1e6),
+    ttftMs,
   };
 }
 
@@ -53,6 +54,12 @@ export class OllamaClient {
     this.model = config.model;
     this.stream = config.stream ?? true;
     this.temperature = config.temperature ?? 0.7;
+    this.apiType = 'ollama';
+    this._numCtxConfig = config.numCtx ?? {};
+  }
+
+  getNumCtx(mode) {
+    return this._numCtxConfig[mode] ?? this._numCtxConfig.default ?? null;
   }
 
   async checkConnection() {
@@ -73,16 +80,22 @@ export class OllamaClient {
     return data.models ?? [];
   }
 
-  // 回傳 { content: string, usage: object }
+  // 回傳 { content: string, toolCalls: null, usage: object }
   async chat(messages, options = {}) {
-    const { onChunk, stream = this.stream } = options;
+    const { onChunk, stream = this.stream, numCtx } = options;
+
+    const ollamaOptions = { temperature: this.temperature };
+    if (numCtx) ollamaOptions.num_ctx = numCtx;
 
     const bodyStr = JSON.stringify({
       model: this.model,
       messages,
       stream,
-      options: { temperature: this.temperature },
+      options: ollamaOptions,
     });
+
+    const requestStart = Date.now();
+    let firstTokenAt = null;
 
     const res = await request(`${this.baseUrl}/api/chat`, {
       method: 'POST',
@@ -100,13 +113,14 @@ export class OllamaClient {
       const data = JSON.parse(await readBody(res));
       return {
         content: data.message?.content ?? '',
+        toolCalls: null,
         usage: parseUsage(data),
       };
     }
 
     // 處理 ndjson streaming
     let fullContent = '';
-    let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, tokensPerSecond: 0, totalDurationMs: 0 };
+    let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, tokensPerSecond: 0, totalDurationMs: 0, ttftMs: 0 };
     let buffer = '';
 
     for await (const chunk of res) {
@@ -120,11 +134,15 @@ export class OllamaClient {
           const json = JSON.parse(line);
           const token = json.message?.content ?? '';
           if (token) {
+            if (!firstTokenAt) firstTokenAt = Date.now();
             fullContent += token;
             if (onChunk) onChunk(token);
           }
           // 最後一個 chunk（done: true）包含 usage stats
-          if (json.done) usage = parseUsage(json);
+          if (json.done) {
+            const ttftMs = firstTokenAt ? firstTokenAt - requestStart : 0;
+            usage = parseUsage(json, ttftMs);
+          }
         } catch {
           // 忽略非 JSON 的行
         }
@@ -136,12 +154,19 @@ export class OllamaClient {
       try {
         const json = JSON.parse(buffer);
         const token = json.message?.content ?? '';
-        if (token) { fullContent += token; if (onChunk) onChunk(token); }
-        if (json.done) usage = parseUsage(json);
+        if (token) {
+          if (!firstTokenAt) firstTokenAt = Date.now();
+          fullContent += token;
+          if (onChunk) onChunk(token);
+        }
+        if (json.done) {
+          const ttftMs = firstTokenAt ? firstTokenAt - requestStart : 0;
+          usage = parseUsage(json, ttftMs);
+        }
       } catch { /* ignore */ }
     }
 
-    return { content: fullContent, usage };
+    return { content: fullContent, toolCalls: null, usage };
   }
 
   setModel(model) {
