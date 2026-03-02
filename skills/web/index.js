@@ -1,3 +1,37 @@
+import { request as httpRequest } from 'http';
+import { request as httpsRequest } from 'https';
+import { URL } from 'url';
+
+const TIMEOUT_MS = 15000;
+
+// Node.js 16 compatible HTTP helper
+function request(urlStr, options = {}, bodyStr = null) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlStr);
+    const isHttps = url.protocol === 'https:';
+    const fn = isHttps ? httpsRequest : httpRequest;
+
+    const req = fn({
+      hostname: url.hostname,
+      port: url.port || (isHttps ? 443 : 80),
+      path: url.pathname + (url.search || ''),
+      method: options.method || 'GET',
+      headers: options.headers || {},
+    }, resolve);
+
+    req.setTimeout(TIMEOUT_MS, () => req.destroy(new Error('請求逾時')));
+    req.on('error', reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+async function readBody(res) {
+  const chunks = [];
+  for await (const chunk of res) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf-8');
+}
+
 export async function execute(skillName, parameters) {
   switch (skillName) {
     case 'fetch_url':
@@ -12,44 +46,41 @@ export async function execute(skillName, parameters) {
 async function fetchUrl(url) {
   if (!url) throw new Error('url 參數為必填');
 
-  const res = await fetch(url, {
+  const res = await request(url, {
     headers: { 'User-Agent': 'SkillAgent/1.0' },
-    signal: AbortSignal.timeout(15000),
   });
 
-  const contentType = res.headers.get('content-type') ?? '';
-  let body;
+  const contentType = res.headers['content-type'] ?? '';
+  let body = await readBody(res);
+
   if (contentType.includes('application/json')) {
-    body = JSON.stringify(await res.json(), null, 2);
-  } else {
-    body = await res.text();
-    // 截斷過長的 HTML
-    if (body.length > 3000) body = body.slice(0, 3000) + '\n... (內容已截斷)';
+    try { body = JSON.stringify(JSON.parse(body), null, 2); } catch { /* use raw */ }
+  } else if (body.length > 3000) {
+    body = body.slice(0, 3000) + '\n... (內容已截斷)';
   }
 
-  return `HTTP ${res.status} ${res.statusText}\nContent-Type: ${contentType}\n\n${body}`;
+  return `HTTP ${res.statusCode}\nContent-Type: ${contentType}\n\n${body}`;
 }
 
 async function postRequest(url, body = {}) {
   if (!url) throw new Error('url 參數為必填');
 
-  const res = await fetch(url, {
+  const bodyStr = JSON.stringify(body);
+  const res = await request(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(bodyStr),
       'User-Agent': 'SkillAgent/1.0',
     },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15000),
-  });
+  }, bodyStr);
 
-  const contentType = res.headers.get('content-type') ?? '';
-  let resBody;
+  const contentType = res.headers['content-type'] ?? '';
+  let resBody = await readBody(res);
+
   if (contentType.includes('application/json')) {
-    resBody = JSON.stringify(await res.json(), null, 2);
-  } else {
-    resBody = await res.text();
+    try { resBody = JSON.stringify(JSON.parse(resBody), null, 2); } catch { /* use raw */ }
   }
 
-  return `HTTP ${res.status} ${res.statusText}\n\n${resBody}`;
+  return `HTTP ${res.statusCode}\n\n${resBody}`;
 }

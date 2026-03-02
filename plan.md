@@ -5,7 +5,9 @@
 
 ## 架構概覽
 
-**零外部依賴**，全使用 Node.js 18+ 原生 API（內建 `fetch`、`readline`）。ESM 模式（`"type": "module"`）。
+**零外部依賴**，全使用 Node.js 16+ 原生 API（`http`/`https`、`readline`）。ESM 模式（`"type": "module"`）。
+
+> **v1.1 變更**：Node.js 最低版本從 18 降為 16。`fetch`（Node 18+ 內建）與 `AbortSignal.timeout()`（Node 17.3+ 內建）改以 `http`/`https` 模組替代，影響 `src/llm/ollama.js` 與 `skills/web/index.js`。
 
 ## 目錄結構
 
@@ -59,12 +61,13 @@ SkillAgent/
 - `chat(messages, options)` — POST `/api/chat`，支援 stream（逐字 chunk）
 - `listModels()` — GET `/api/tags`
 - `checkConnection()` — 驗證 Ollama 是否在線
-- 使用 Node.js 內建 `fetch`，處理 ndjson streaming
+- 使用 Node.js `http`/`https` 模組（Node 16 相容，不用 fetch）
 
 ### 4. `src/skills/skillLoader.js` — SkillLoader 類別
-- `load()` — 掃描 `skills/` 子目錄，讀 `manifest.json`，動態 `import` `index.js`
+- `load()` — 掃描 `skills/` 子目錄，讀 `skill.md`（Markdown 格式），動態 `import` `index.js`
 - `getRegistry()` — 回傳 `Map<moduleName, {manifest, execute}>`
 - `getSkillsDescription()` — 輸出供注入 system prompt 的技能文字描述
+- Skill Markdown 格式：`# 模組名` / `## 技能名` / `### Parameters` / `- param (type, required): 描述`
 
 ### 5. `src/agent/planner.js` — Planner 類別
 - `parse(llmResponse)` — 用 regex 偵測 JSON 格式工具呼叫

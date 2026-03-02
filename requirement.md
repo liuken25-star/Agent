@@ -1,8 +1,9 @@
-使用Node.js開發一個AI Agent程式。
+使用Node.js開發一個AI Agent程式，Node.js版本為16以上。
 
 此AI Agent具備下面功能：
 - 可以連結本地端使用Ollama建立的大語言模型
 - 支援Skills
+  - Skill的格式使用markdown，並使用Anthropic的格式
   - 支援多個技能模組，每個技能模組可以包含多個技能
 - 提供CLI界面，可以輸入指令給AI Agent執行
 - 提供連結Ollama得說明，解釋如何建構本地端大語言模型，並透過此程式連結。
