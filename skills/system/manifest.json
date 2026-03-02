@@ -1,0 +1,28 @@
+{
+  "name": "system",
+  "version": "1.0.0",
+  "description": "系統資訊查詢技能",
+  "skills": [
+    {
+      "name": "get_time",
+      "description": "取得目前日期與時間",
+      "parameters": {}
+    },
+    {
+      "name": "get_platform",
+      "description": "取得作業系統與平台資訊",
+      "parameters": {}
+    },
+    {
+      "name": "run_command",
+      "description": "執行 shell 指令並回傳輸出（請謹慎使用）",
+      "parameters": {
+        "command": {
+          "type": "string",
+          "description": "要執行的 shell 指令",
+          "required": true
+        }
+      }
+    }
+  ]
+}

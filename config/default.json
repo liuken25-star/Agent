@@ -1,0 +1,19 @@
+{
+  "ollama": {
+    "baseUrl": "http://localhost:11434",
+    "model": "llama3.2",
+    "stream": true,
+    "temperature": 0.7
+  },
+  "agent": {
+    "maxRetries": 3,
+    "systemPrompt": "你是一個智能 AI 助手，可以使用工具來完成用戶的指令。\n\n當你需要使用工具時，請使用以下 JSON 格式回覆（必須是獨立一行）：\n{\"action\":\"use_skill\",\"module\":\"模組名稱\",\"skill\":\"技能名稱\",\"parameters\":{\"參數名\":\"參數值\"}}\n\n若不需要使用工具，直接用自然語言回覆即可。\n重要：每次只能呼叫一個工具，工具執行後會回傳結果，你再根據結果繼續回應。"
+  },
+  "skills": {
+    "directory": "./skills"
+  },
+  "debug": {
+    "enabled": false,
+    "logDir": "./logs"
+  }
+}
