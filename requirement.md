@@ -2,9 +2,48 @@
 
 此AI Agent具備下面功能：
 - 可以連結本地端使用Ollama建立的大語言模型
+  - 支援透過設定切換兩種 API 連線方式：
+    - Ollama 原生 API（`/api/chat`）
+    - OpenAI 相容 API（`/v1/chat/completions`），可同時相容 LM Studio、vLLM、OpenRouter 等後端
+  - 使用 OpenAI 相容 API 時，可利用原生的 Tool Calling 機制（`tools` / `tool_calls`）取代文字解析，並自動取得 Token 使用量統計
+- 可選擇使用下面模式：
+  - Auto 模式（預設）
+    - 由 Agent 根據使用者輸入自動判斷最適合的執行模式（如簡單問答自動使用純對話模式、需要工具時自動使用 ReAct 模式等）。
+  - ReAct模式
+    - 預設的最大思考次數為5次，並可透過設定調整。 
+  - Plan模式
+    - 在開始執行前，在 CLI 介面上先印出 Plan 讓使用者過目（甚至修改）後才開始執行
+  - 純對話模式
+    - 不使用任何 Skill，直接與模型進行基礎對話問答，節省 Token 並以最快速度回應。
+  - 反思與自我修正模式 (Reflexion)
+    - 在執行腳本 (如 Python/Bash) 或最終輸出前，增加一步自我審查機制。若腳本執行失敗，會將錯誤訊息回傳給 Agent 重新思考並修正，直到成功或到達次數上限為止。
+  - Swarm / Multi-Agent 模式
+    - 建立一個負責分派任務的主控 Agent (Router)，將不同領域的問題指派給擅長特定技能的子 Agent 處理，以支援大規模技能庫並減少單一 Prompt 負載。
+    - 透過設定檔定義子 Agent 的分組，指定每個子 Agent 負責的技能模組範圍。
+  - 模式切換機制：
+    - 設定檔 (`config/default.json`) 可定義預設模式（`defaultMode`）
+    - CLI 提供 `/mode <模式名稱>` 指令，可在執行期間隨時切換模式
+    - CLI 的 prompt 顯示目前所處模式，例如 `[react] >`、`[auto] >`，讓使用者隨時掌握狀態
 - 支援Skills
   - Skill的格式使用markdown，並使用Anthropic的格式
+  - 支援script的執行，可接受bash、python、node等
+    - script可以內嵌在skill.md中，也可以放在skills/skillName/script中
+    - 如果 Skill 裡面的 Python/Bash 腳本執行陷入無窮迴圈或等待，預設30秒的timeout。
+    - 安全機制：執行可能修改系統狀態的腳本或指令前，須在 CLI 提示使用者確認（Y/N）後才執行。
+  - 支援reference的額外資料參考
+    - reference可以內嵌在skill.md中，也可以放在skills/skillName/reference中
   - 支援多個技能模組，每個技能模組可以包含多個技能
+    - 每個技能模組可以放在skills/skillName/中
+    - 每個技能模組的skills/skillName/skill.md中
 - 提供CLI界面，可以輸入指令給AI Agent執行
-- 提供連結Ollama得說明，解釋如何建構本地端大語言模型，並透過此程式連結。
+  - 加入一個 --serve 模式，用以啟動一個網頁版 UI
+    - 使用 WebSocket 支援即時串流回應
+    - 網頁版 UI 須支援與 CLI 相同的功能（模式切換、技能列表、除錯開關等）
+    - 前端使用純 HTML/CSS/JS 實作，不依賴外部前端框架
+- 提供連結Ollama的說明，解釋如何建構本地端大語言模型，並透過此程式連結。
 - 支援除錯模式，一但開啟可以將每次與LLM的對話儲存下來。
+  - 除錯訊息包含：
+    - 使用token數目
+    - 輸出效能，包含下面項目：
+      - 首字生成時間 (TTFT, Time To First Token)
+      - 生成速度 (Tokens per second)

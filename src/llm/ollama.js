@@ -29,6 +29,24 @@ async function readBody(res) {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
+// 將 Ollama 回傳的原始 stats 轉為易讀格式
+function parseUsage(json) {
+  const evalCount = json.eval_count ?? 0;
+  const evalDurationNs = json.eval_duration ?? 0;
+  const promptTokens = json.prompt_eval_count ?? 0;
+  const totalDurationNs = json.total_duration ?? 0;
+
+  return {
+    promptTokens,
+    completionTokens: evalCount,
+    totalTokens: promptTokens + evalCount,
+    tokensPerSecond: evalDurationNs > 0
+      ? Math.round(evalCount / (evalDurationNs / 1e9) * 10) / 10
+      : 0,
+    totalDurationMs: Math.round(totalDurationNs / 1e6),
+  };
+}
+
 export class OllamaClient {
   constructor(config) {
     this.baseUrl = config.baseUrl;
@@ -55,6 +73,7 @@ export class OllamaClient {
     return data.models ?? [];
   }
 
+  // 回傳 { content: string, usage: object }
   async chat(messages, options = {}) {
     const { onChunk, stream = this.stream } = options;
 
@@ -79,11 +98,15 @@ export class OllamaClient {
 
     if (!stream) {
       const data = JSON.parse(await readBody(res));
-      return data.message?.content ?? '';
+      return {
+        content: data.message?.content ?? '',
+        usage: parseUsage(data),
+      };
     }
 
-    // 處理 ndjson streaming（Node.js 16 stream 支援 async iteration）
+    // 處理 ndjson streaming
     let fullContent = '';
+    let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, tokensPerSecond: 0, totalDurationMs: 0 };
     let buffer = '';
 
     for await (const chunk of res) {
@@ -100,25 +123,25 @@ export class OllamaClient {
             fullContent += token;
             if (onChunk) onChunk(token);
           }
+          // 最後一個 chunk（done: true）包含 usage stats
+          if (json.done) usage = parseUsage(json);
         } catch {
           // 忽略非 JSON 的行
         }
       }
     }
 
-    // 處理緩衝區中剩餘的內容
+    // 處理緩衝區剩餘內容
     if (buffer.trim()) {
       try {
         const json = JSON.parse(buffer);
         const token = json.message?.content ?? '';
-        if (token) {
-          fullContent += token;
-          if (onChunk) onChunk(token);
-        }
+        if (token) { fullContent += token; if (onChunk) onChunk(token); }
+        if (json.done) usage = parseUsage(json);
       } catch { /* ignore */ }
     }
 
-    return fullContent;
+    return { content: fullContent, usage };
   }
 
   setModel(model) {

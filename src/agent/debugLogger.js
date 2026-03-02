@@ -9,24 +9,12 @@ export class DebugLogger {
     this.turnCount = 0;
   }
 
-  enable() {
-    this.enabled = true;
-  }
+  enable() { this.enabled = true; }
+  disable() { this.enabled = false; }
+  toggle() { this.enabled = !this.enabled; return this.enabled; }
+  isEnabled() { return this.enabled; }
 
-  disable() {
-    this.enabled = false;
-  }
-
-  toggle() {
-    this.enabled = !this.enabled;
-    return this.enabled;
-  }
-
-  isEnabled() {
-    return this.enabled;
-  }
-
-  async log(model, messages, response) {
+  async log(model, messages, response, usage) {
     if (!this.enabled) return;
 
     this.turnCount++;
@@ -35,6 +23,13 @@ export class DebugLogger {
       session: this.sessionId,
       turn: this.turnCount,
       model,
+      usage: usage ? {
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        tokensPerSecond: usage.tokensPerSecond,
+        totalDurationMs: usage.totalDurationMs,
+      } : null,
       messages,
       response,
     };
@@ -42,8 +37,7 @@ export class DebugLogger {
     try {
       await mkdir(this.logDir, { recursive: true });
       const filename = `${this.sessionId}_turn${String(this.turnCount).padStart(3, '0')}.json`;
-      const filepath = join(this.logDir, filename);
-      await writeFile(filepath, JSON.stringify(entry, null, 2), 'utf-8');
+      await writeFile(join(this.logDir, filename), JSON.stringify(entry, null, 2), 'utf-8');
     } catch (err) {
       console.warn(`[Debug] 無法寫入日誌: ${err.message}`);
     }

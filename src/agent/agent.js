@@ -9,6 +9,7 @@ export class Agent {
     this.planner = new Planner();
     this.conversationHistory = [];
     this.systemPrompt = '';
+    this.mode = config.mode ?? 'react'; // 'react' | 'plan'
   }
 
   async initialize() {
@@ -19,31 +20,76 @@ export class Agent {
       );
     }
 
-    // 組裝系統提示：基礎提示 + 技能清單
     const skillsDesc = this.registry.size > 0
       ? `\n\n${buildSkillsDescription(this.registry)}`
       : '';
     this.systemPrompt = this.config.systemPrompt + skillsDesc;
   }
 
+  setMode(mode) {
+    if (mode !== 'react' && mode !== 'plan') throw new Error(`不支援的模式: ${mode}`);
+    this.mode = mode;
+  }
+
+  getMode() { return this.mode; }
+
   async run(userInput, onChunk) {
+    if (this.mode === 'plan') {
+      return this._runPlan(userInput, onChunk);
+    }
+    return this._runReact(userInput, onChunk);
+  }
+
+  // ── ReAct 模式 ─────────────────────────────────────────────────────────
+  async _runReact(userInput, onChunk) {
+    this.conversationHistory.push({ role: 'user', content: userInput });
+    const messages = this._buildMessages();
+    return this._executeLoop(messages, onChunk);
+  }
+
+  // ── Plan 模式 ──────────────────────────────────────────────────────────
+  // 1. 先請 LLM 制定計畫（不執行）
+  // 2. 將計畫加入對話，再請 LLM 執行（允許使用工具）
+  async _runPlan(userInput, onChunk) {
     this.conversationHistory.push({ role: 'user', content: userInput });
 
-    const messages = this._buildMessages();
+    // 階段一：規劃
+    const planPrompt = [
+      { role: 'system', content: this.systemPrompt },
+      ...this.conversationHistory.slice(0, -1),
+      { role: 'user', content: `[規劃階段] 請為以下任務制定詳細的執行計畫，以編號列出步驟，不要執行：\n${userInput}` },
+    ];
+
+    const { content: plan, usage: planUsage } = await this.ollama.chat(planPrompt, { stream: false });
+    await this.debugLogger?.log(this.ollama.model, planPrompt, plan, planUsage);
+
+    if (onChunk) {
+      onChunk(`\n📋 計畫：\n${plan}\n\n⚡ 執行中...\n`);
+    }
+
+    // 階段二：執行（將計畫作為 assistant 訊息注入）
+    const execMessages = [
+      ...this._buildMessages(),
+      { role: 'assistant', content: `[執行計畫]\n${plan}` },
+      { role: 'user', content: '請根據以上計畫逐步執行，必要時使用工具，完成後給出最終結果。' },
+    ];
+
+    return this._executeLoop(execMessages, onChunk);
+  }
+
+  // ── 共用的 ReAct 執行循環 ───────────────────────────────────────────────
+  async _executeLoop(messages, onChunk) {
     let retries = 0;
     const maxRetries = this.config.maxRetries ?? 3;
 
     while (retries < maxRetries) {
-      let llmResponse = '';
+      const isFirst = retries === 0;
+      const { content: llmResponse, usage } = await this.ollama.chat(
+        messages,
+        isFirst && onChunk ? { onChunk } : { stream: false }
+      );
 
-      if (onChunk && retries === 0) {
-        // 第一次呼叫時 streaming 輸出
-        llmResponse = await this.ollama.chat(messages, { onChunk });
-      } else {
-        llmResponse = await this.ollama.chat(messages, { stream: false });
-      }
-
-      await this.debugLogger?.log(this.ollama.model, messages, llmResponse);
+      await this.debugLogger?.log(this.ollama.model, messages, llmResponse, usage);
 
       const parsed = this.planner.parse(llmResponse);
 
@@ -57,10 +103,9 @@ export class Agent {
       const skillModule = this.registry.get(moduleName);
 
       if (!skillModule) {
-        const errMsg = `找不到技能模組: ${moduleName}`;
         messages.push(
           { role: 'assistant', content: llmResponse },
-          { role: 'user', content: `[工具錯誤] ${errMsg}，請改用其他方式回答。` }
+          { role: 'user', content: `[工具錯誤] 找不到技能模組: ${moduleName}，請改用其他方式回答。` }
         );
         retries++;
         continue;
@@ -73,7 +118,6 @@ export class Agent {
         skillResult = `[工具執行錯誤] ${err.message}`;
       }
 
-      // 將技能結果加入對話
       messages.push(
         { role: 'assistant', content: llmResponse },
         { role: 'user', content: `[工具回傳結果]\n${skillResult}` }
@@ -82,20 +126,15 @@ export class Agent {
       retries++;
     }
 
-    // 超過重試次數，回傳最後一次的純文字回覆
-    const fallback = await this.ollama.chat(messages, { stream: false });
-    await this.debugLogger?.log(this.ollama.model, messages, fallback);
+    // 超過重試次數
+    const { content: fallback, usage } = await this.ollama.chat(messages, { stream: false });
+    await this.debugLogger?.log(this.ollama.model, messages, fallback, usage);
     this.conversationHistory.push({ role: 'assistant', content: fallback });
     return fallback;
   }
 
-  clearHistory() {
-    this.conversationHistory = [];
-  }
-
-  getConversationHistory() {
-    return this.conversationHistory;
-  }
+  clearHistory() { this.conversationHistory = []; }
+  getConversationHistory() { return this.conversationHistory; }
 
   _buildMessages() {
     return [

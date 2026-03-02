@@ -127,6 +127,23 @@ SkillAgent/
 - `src/agent/agent.js` — 每次 `ollama.chat()` 後呼叫 `debugLogger?.log()`
 - `src/cli/cli.js` — 新增 `/debug` 指令切換除錯模式，banner 顯示目前狀態
 
+### 12. Agent 模式（新增）
+
+- `config/default.json` — 新增 `"mode": "react"`
+- `src/agent/agent.js` — `mode` 屬性、`setMode()`、`getMode()`
+  - **ReAct 模式**（預設）：`_runReact()` → `_executeLoop()`
+  - **Plan 模式**：`_runPlan()` → 先規劃（無 stream，記錄 usage）→ 注入計畫 → `_executeLoop()`
+  - 共用 `_executeLoop()` 執行 ReAct 循環
+- `src/cli/cli.js` — 新增 `/mode [react|plan]` 指令，banner 顯示目前模式
+
+### 13. 除錯模式增強（新增）
+
+- `src/llm/ollama.js` — `chat()` 改為回傳 `{ content, usage }`
+  - `usage`: `promptTokens`, `completionTokens`, `totalTokens`, `tokensPerSecond`, `totalDurationMs`
+  - 從 streaming 最後 `done: true` chunk 解析 Ollama stats
+- `src/agent/debugLogger.js` — `log()` 加入 `usage` 參數，寫入日誌
+- `src/agent/agent.js` — 所有 `ollama.chat()` 呼叫改為解構 `{ content, usage }`，傳 `usage` 給 logger
+
 ## 驗證方式
 1. `node src/index.js` 啟動，確認顯示 Ollama 連線狀態與技能數量
 2. 輸入 `/skills` 確認三個技能模組正確載入
@@ -134,4 +151,6 @@ SkillAgent/
 4. 輸入「讀取 README.md」，確認 Agent 呼叫 `file.read_file`
 5. 輸入 `/clear` 後對話歷史重置，`/exit` 正常離開
 6. 在 `skills/` 新增自訂模組目錄，重啟後確認自動載入
-7. 輸入 `/debug` 開啟除錯模式，發送訊息後確認 `logs/` 目錄產生 JSON 日誌
+7. 輸入 `/debug` 開啟除錯模式，發送訊息後確認 `logs/` 目錄產生含 usage 的 JSON 日誌
+8. 輸入 `/mode plan` 切換為 Plan 模式，確認回應先顯示計畫再執行
+9. 輸入 `/mode react` 切回 ReAct 模式

@@ -2,12 +2,13 @@ import readline from 'readline';
 
 const HELP_TEXT = `
 可用指令：
-  /help          顯示此說明
-  /skills        列出所有可用技能
-  /model <名稱>  切換 Ollama 模型
-  /clear         清除對話歷史
-  /debug         切換除錯模式（開啟時將每次 LLM 對話儲存至 logs/）
-  /exit, /quit   離開程式
+  /help               顯示此說明
+  /skills             列出所有可用技能
+  /model <名稱>       切換 Ollama 模型
+  /mode [react|plan]  查看或切換 Agent 模式
+  /clear              清除對話歷史
+  /debug              切換除錯模式（開啟時將每次 LLM 對話儲存至 logs/）
+  /exit, /quit        離開程式
 
 其他輸入會直接傳送給 AI 助手。
 `;
@@ -105,6 +106,20 @@ export class CLI {
         }
         break;
 
+      case '/mode':
+        if (!args[0]) {
+          console.log(`目前模式: ${this.agent.getMode()}  (可用: react | plan)`);
+        } else {
+          try {
+            this.agent.setMode(args[0]);
+            this.agent.clearHistory();
+            console.log(`已切換至 ${args[0]} 模式，對話歷史已清除。`);
+          } catch (err) {
+            console.log(`[錯誤] ${err.message}`);
+          }
+        }
+        break;
+
       case '/clear':
         this.agent.clearHistory();
         console.log('對話歷史已清除。');
@@ -156,6 +171,8 @@ export class CLI {
     console.log('║         SkillAgent v1.0.0            ║');
     console.log(`║  模型: ${models.padEnd(28)}║`);
     console.log(`║  技能: ${skillCount} 個模組 / ${totalSkills} 個技能${' '.repeat(Math.max(0, 21 - String(skillCount).length - String(totalSkills).length))}║`);
+    const modeLabel = this.agent.getMode() === 'plan' ? 'Plan 模式' : 'ReAct 模式';
+    console.log(`║  模式: ${modeLabel.padEnd(28)}║`);
     const debugStatus = this.debugLogger?.isEnabled() ? '開啟' : '關閉';
     console.log(`║  除錯: ${debugStatus.padEnd(28)}║`);
     console.log('╚══════════════════════════════════════╝');

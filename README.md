@@ -72,8 +72,14 @@ npm start
 ```
 skills/
 └── my-module/
-    ├── skill.md    # 技能描述（Markdown 格式）
-    └── index.js    # 技能實作
+    ├── skill.md          # 技能描述（必填）
+    ├── index.js          # JS 實作（選填）
+    ├── script/           # 外部腳本目錄（選填）
+    │   ├── say_hello.sh  # bash 腳本，對應 say_hello 技能
+    │   └── analyze.py    # python 腳本，對應 analyze 技能
+    └── reference/        # 外部參考資料目錄（選填，自動載入）
+        ├── knowledge.md
+        └── faq.txt
 ```
 
 ### skill.md 格式
@@ -91,11 +97,20 @@ description: 我的自訂技能模組
 ### Parameters
 - name (string, required): 名字
 
-## say_goodbye
-向指定名字道別
+### Script
+```bash
+echo "你好，$PARAM_NAME！"
+```
+
+## lookup
+查詢參考資料並回答
 
 ### Parameters
-- name (string, required): 名字
+- query (string, required): 查詢關鍵字
+
+### Reference
+- ./data/knowledge.md
+- ./data/faq.md
 ```
 
 **格式規則：**
@@ -103,26 +118,54 @@ description: 我的自訂技能模組
 - 模組名稱 — 自動取自目錄名稱（如目錄為 `my-module`，名稱即為 `my-module`）
 - `## 技能名稱` — 定義一個技能，下方段落為技能描述
 - `### Parameters` — 列出該技能的參數
-- `- 參數名 (type, required): 描述` — 必填參數
-- `- 參數名 (type): 描述` — 選填參數
-- 支援的 type：`string`、`number`、`boolean`、`object`
+  - `- 參數名 (type, required): 描述` — 必填參數
+  - `- 參數名 (type): 描述` — 選填參數
+  - 支援的 type：`string`、`number`、`boolean`、`object`
+- `### Script` — 內嵌腳本（可選，亦可改用外部腳本檔）
+  - 支援語言：`bash`、`sh`、`python`、`python3`、`node`
+  - 參數以環境變數傳入：`PARAM_<NAME>`（大寫）
+- `### Reference` — 指定額外參考檔案路徑（相對於模組目錄）
+  - 檔案內容以環境變數傳入 script：`SKILLREF_0`、`SKILLREF_1`...
+  - JS 技能可透過 `context.references[n].content` 取得
 
-### index.js 格式
+### Script 來源（優先順序）
 
-匯出 `execute(skillName, parameters)` 函數：
+| 優先 | 來源 | 說明 |
+|------|------|------|
+| 1 | `script/<skillName>.<ext>` | 外部腳本檔（最高優先） |
+| 2 | `### Script` 區塊 | skill.md 內嵌腳本 |
+| 3 | `index.js` | JavaScript 實作 |
+
+**外部腳本檔命名規則：** 檔名需與技能名稱相同，副檔名決定直譯器：
+- `.sh` / `.bash` → bash
+- `.py` → python3
+- `.js` → node
+
+### Reference 來源（自動合併）
+
+| 來源 | 說明 |
+|------|------|
+| `### Reference` 區塊 | 指定特定技能使用的參考檔 |
+| `reference/` 目錄 | 模組層級，目錄內所有檔案自動載入，對所有技能可用 |
+
+### index.js 格式（選填）
+
+若技能未定義任何 Script，則從 `index.js` 的 `execute` 函數執行：
 
 ```javascript
-export async function execute(skillName, parameters) {
+export async function execute(skillName, parameters, context) {
+  // context.references 包含所有 reference 檔案的內容
+  // context.references[0] = { path: '...', content: '...' }
   switch (skillName) {
     case 'say_hello':
       return `你好，${parameters.name}！`;
-    case 'say_goodbye':
-      return `再見，${parameters.name}！`;
     default:
       throw new Error(`Unknown skill: ${skillName}`);
   }
 }
 ```
+
+> 若所有技能皆有 Script（內嵌或外部），則 `index.js` 可省略。
 
 重啟程式後，新技能即自動可用。
 
